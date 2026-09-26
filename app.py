@@ -57,7 +57,7 @@ st.subheader("🔊 Listen to Heartbeat")
 
 if st.button("▶ Play Heartbeat"):
     sample_rate = 44100
-    duration = 2.0
+    duration = 30.0
 
     t = np.linspace(
         0,
@@ -81,8 +81,11 @@ if st.button("▶ Play Heartbeat"):
             0.8 * lub + 0.4 * dub
         )
 
-    add_beat(0.00, 1.0)
-    add_beat(0.35, 0.7)
+   for start in np.arange(0, duration, 0.83):
+    add_beat(start, 1.0)
+
+    if start + 0.28 < duration:
+        add_beat(start + 0.28, 0.7)
 
     audio = audio / np.max(np.abs(audio))
     audio = (audio * 32767).astype(np.int16)
