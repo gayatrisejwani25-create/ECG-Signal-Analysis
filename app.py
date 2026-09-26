@@ -111,8 +111,41 @@ data = data.dropna(subset=[ecg_column])
 
 signal = data[ecg_column].to_numpy()
 
+heartbeat_type = st.selectbox(
+    "Select Heartbeat Example",
+    [
+        "Normal Heartbeat",
+        "High Heart Rate",
+        "Low Heart Rate",
+        "Irregular Heartbeat"
+    ]
+)
+if heartbeat_type == "Normal Heartbeat":
+    ecg = signal
 
-ecg=signal
+elif heartbeat_type == "High Heart Rate":
+    speed_factor = 0.65
+    new_length = int(len(signal) * speed_factor)
+    ecg = np.interp(
+        np.linspace(0, len(signal) - 1, new_length),
+        np.arange(len(signal)),
+        signal
+    )
+
+elif heartbeat_type == "Low Heart Rate":
+    speed_factor = 1.35
+    new_length = int(len(signal) * speed_factor)
+    ecg = np.interp(
+        np.linspace(0, len(signal) - 1, new_length),
+        np.arange(len(signal)),
+        signal
+    )
+
+else:
+    ecg = signal.copy()
+    if len(ecg) > 1000:
+        ecg[500:700] = ecg[500:700] * 0.5
+        ecg[1200:1350] = ecg[1200:1350] * 1.3
 
 
 # ==========================================
