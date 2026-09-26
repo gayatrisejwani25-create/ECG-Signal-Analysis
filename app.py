@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, find_peaks
+import io
+from scipy.io.wavfile import write
 
 st.set_page_config(
     page_title="ECG Signal Analysis",
@@ -49,6 +51,12 @@ except Exception as e:
 st.write("First five rows of ECG data:")
 
 st.dataframe(data.head())
+
+# Play heartbeat sound
+st.subheader("🔊 Listen to Heartbeat")
+
+if st.button("▶ Play Heartbeat"):
+    st.info("Heartbeat audio will be added here.")
 
 
 # ==========================================
