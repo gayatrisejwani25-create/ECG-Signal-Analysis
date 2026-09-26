@@ -55,25 +55,19 @@ st.dataframe(data.head())
 # SELECT ECG COLUMN
 # ==========================================
 
-numeric_columns = data.select_dtypes(
-    include=np.number
-).columns.tolist()
+ecg_column = data.columns[0]
 
-if len(numeric_columns) == 0:
-
-    st.error(
-        "No numerical ECG column was found."
-    )
-
-    st.stop()
-
-
-signal_column = st.selectbox(
-    "Select ECG signal column:",
-    numeric_columns
+data[ecg_column] = pd.to_numeric(
+    data[ecg_column],
+    errors="coerce"
 )
 
-ecg = data[signal_column].dropna().values
+data = data.dropna(subset=[ecg_column])
+
+signal = data[ecg_column].to_numpy()
+
+
+ecg=signal
 
 
 # ==========================================
