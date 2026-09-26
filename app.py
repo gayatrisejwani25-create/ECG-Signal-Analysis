@@ -174,9 +174,7 @@ if st.button("▶ Start Live ECG"):
         plt.close(fig_live)
 
         time.sleep(0.05)
-
-        time.sleep(0.05)
-        plt.close(fig_live)
+        
 fs = st.number_input(
     "Sampling frequency (Hz)",
     min_value=50,
