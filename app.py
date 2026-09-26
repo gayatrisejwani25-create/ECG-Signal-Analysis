@@ -321,13 +321,19 @@ ax4.set_title(
 ax4.legend()
 
 ax4.grid(True)
+st.write(f"Number of detected R peaks: {len(peaks)}")
+
+if len(peaks) > 1:
+    rr_intervals = np.diff(peaks) / fs
+    heart_rate = 60 / np.mean(rr_intervals)
+    st.metric("Heart Rate", f"{heart_rate:.1f} BPM")
+else:
+    st.warning("Not enough R-peaks detected to calculate heart rate.")
 
 st.pyplot(fig4)
 
 
-st.write(
-    f"Number of detected R peaks: {len(peaks)}"
-)
+
 
 
 # ==========================================
