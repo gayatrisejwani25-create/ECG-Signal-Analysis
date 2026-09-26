@@ -29,7 +29,7 @@ st.header("1. ECG Signal")
 
 try:
 
-    data = pd.read_csv("ecg_sample.csv")
+    data = pd.read_csv("ecg_sample.csv",on_bad_lines="skip",engine="python")
 
     st.success("ECG dataset loaded successfully!")
 
