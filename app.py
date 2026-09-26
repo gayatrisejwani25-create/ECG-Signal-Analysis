@@ -170,7 +170,27 @@ else:
 # ==========================================
 # SAMPLING FREQUENCY
 # ==========================================
+st.subheader("📈 Live ECG Simulation")
+st.info("Press Start to display the ECG waveform moving like a monitor.")
 
+live_placeholder = st.empty()
+
+if st.button("▶ Start Live ECG"):
+    window_size = min(1000, len(ecg))
+
+    for i in range(window_size, min(len(ecg), 5000), 25):
+        live_data = ecg[i - window_size:i]
+
+        fig_live, ax_live = plt.subplots(figsize=(10, 3))
+
+        ax_live.plot(live_data)
+        ax_live.set_title("Live ECG Waveform")
+        ax_live.set_xlabel("Samples")
+        ax_live.set_ylabel("Amplitude")
+        ax_live.grid(True)
+
+        live_placeholder.pyplot(fig_live)
+        plt.close(fig_live)
 fs = st.number_input(
     "Sampling frequency (Hz)",
     min_value=50,
