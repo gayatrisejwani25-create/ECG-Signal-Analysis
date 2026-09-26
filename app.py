@@ -81,11 +81,12 @@ if st.button("▶ Play Heartbeat"):
             0.8 * lub + 0.4 * dub
         )
 
-   for start in np.arange(0, duration, 0.83):
+    for start in np.arange(0, duration, 0.83):
         add_beat(start, 1.0)
 
         if start + 0.28 < duration:
             add_beat(start + 0.28, 0.7)
+
 
     audio = audio / np.max(np.abs(audio))
     audio = (audio * 32767).astype(np.int16)
