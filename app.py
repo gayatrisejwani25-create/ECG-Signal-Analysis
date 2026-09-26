@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 from scipy.signal import butter, filtfilt, find_peaks
 import io
 from scipy.io.wavfile import write
@@ -155,12 +156,11 @@ st.subheader("📈 Live ECG Simulation")
 st.info("Press Start to display the ECG waveform moving like a monitor.")
 
 live_placeholder = st.empty()
-
 if st.button("▶ Start Live ECG"):
     window_size = min(1000, len(ecg))
 
     for i in range(window_size, min(len(ecg), 5000), 25):
-        live_data = ecg[i - window_size:i]
+        live_data = ecg[i-window_size:i]
 
         fig_live, ax_live = plt.subplots(figsize=(10, 3))
 
@@ -171,6 +171,11 @@ if st.button("▶ Start Live ECG"):
         ax_live.grid(True)
 
         live_placeholder.pyplot(fig_live)
+        plt.close(fig_live)
+
+        time.sleep(0.05)
+
+        time.sleep(0.05)
         plt.close(fig_live)
 fs = st.number_input(
     "Sampling frequency (Hz)",
