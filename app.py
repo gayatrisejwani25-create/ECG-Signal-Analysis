@@ -56,8 +56,41 @@ st.dataframe(data.head())
 st.subheader("🔊 Listen to Heartbeat")
 
 if st.button("▶ Play Heartbeat"):
-    st.info("Heartbeat audio will be added here.")
+    sample_rate = 44100
+    duration = 2.0
 
+    t = np.linspace(
+        0,
+        duration,
+        int(sample_rate * duration),
+        endpoint=False
+    )
+
+    audio = np.zeros_like(t)
+
+    def add_beat(start, strength=1.0):
+        idx = t >= start
+        local_t = t[idx] - start
+
+        envelope = np.exp(-35 * local_t)
+
+        lub = np.sin(2 * np.pi * 70 * local_t)
+        dub = np.sin(2 * np.pi * 110 * local_t)
+
+        audio[idx] += strength * envelope * (
+            0.8 * lub + 0.4 * dub
+        )
+
+    add_beat(0.00, 1.0)
+    add_beat(0.35, 0.7)
+
+    audio = audio / np.max(np.abs(audio))
+    audio = (audio * 32767).astype(np.int16)
+
+    buffer = io.BytesIO()
+    write(buffer, sample_rate, audio)
+
+    st.audio(buffer.getvalue(), format="audio/wav")
 
 # ==========================================
 # SELECT ECG COLUMN
