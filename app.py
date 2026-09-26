@@ -152,10 +152,6 @@ else:
 # ==========================================
 # SAMPLING FREQUENCY
 # ==========================================
-st.subheader("📈 Live ECG Simulation")
-st.info("Press Start to display the ECG waveform moving like a monitor.")
-
-live_placeholder = st.empty()
 if st.button("▶ Start Live ECG"):
     window_size = min(1000, len(ecg))
 
