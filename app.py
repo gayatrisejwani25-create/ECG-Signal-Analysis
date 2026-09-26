@@ -54,7 +54,26 @@ st.dataframe(data.head())
 
 # Play heartbeat sound 
 st.subheader("🔊 Listen to Heartbeat")
+st.subheader("📈 Live ECG Simulation")
+st.info("The ECG waveform is displayed below before analysis.")
+live_placeholder = st.empty()
 
+if st.button("▶ Start Live ECG"):
+    window_size = min(1000, len(ecg))
+
+    for i in range(window_size, len(ecg), 25):
+        live_data = ecg[i - window_size:i]
+
+        fig_live, ax_live = plt.subplots(figsize=(10, 3))
+
+        ax_live.plot(live_data)
+        ax_live.set_title("Live ECG Waveform")
+        ax_live.set_xlabel("Samples")
+        ax_live.set_ylabel("Amplitude")
+        ax_live.grid(True)
+
+        live_placeholder.pyplot(fig_live)
+        plt.close(fig_live)
 if st.button("▶ Play Heartbeat"):
     sample_rate = 44100
     duration = 30.0
