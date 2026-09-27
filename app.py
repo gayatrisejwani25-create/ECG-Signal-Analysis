@@ -1,6 +1,6 @@
 """
-ECG AS A SIGNAL — Signals & Systems Project
-=============================================
+ECG AS A SIGNAL — Signals & Systems Project  (v2 — Reference vs. Sample edition)
+=================================================================================
 An interactive Streamlit app that walks through the complete pipeline of
 turning the heart's continuous electrical activity x(t) into a digital
 signal x[n], and back into insight:
@@ -11,22 +11,35 @@ signal x[n], and back into insight:
 Features
 --------
 1. Theory walkthrough (continuous vs discrete signals, sampling theorem,
-   acquisition chain, applications).
+   acquisition chain, applications, and — new in v2 — the theory of
+   comparing a reference signal against a sample signal).
 2. FIVE audible + visible heartbeat examples, chosen through a simple
    step-by-step flow (Choose -> Listen & Watch -> Analyze -> Compare):
-     - Normal
+     - Normal            (also used as the fixed REFERENCE rhythm)
      - Tachycardia (High Rate)
      - Bradycardia (Low Rate)
      - Irregular (Arrhythmia-like)
-     - Cardiac Arrest / Flatline (Asystole) — demonstrates what the ECG
-       trace AND the monitor alarm sound like when a patient's heart
-       stops, so the "no heartbeat" case is covered end-to-end too.
-3. A real ECG recording (ecg_sample.csv) used to demonstrate sampling,
+     - Cardiac Arrest / Flatline (Asystole)
+3. NEW — Reference vs. Sample comparison, for every chosen rhythm:
+     - Reference (Normal) audio playback + downloadable .wav, next to the
+       Sample audio playback + downloadable .wav.
+     - Workable reference links to real, human-recorded ECG/heart-sound
+       data (PhysioNet, Wikipedia) so the synthetic examples can be
+       checked against genuine recordings.
+     - Continuous-signal comparison graph  (reference vs. sample, x(t))
+     - Discrete-signal comparison graph    (reference vs. sample, x[n])
+     - A combined dashboard showing both comparisons stacked together
+     - A quantitative "similarity score" (normalized cross-correlation)
+       between the reference and sample rhythms, computed on both the
+       continuous and discrete versions, plus an R-peak amplitude-
+       retention metric that exposes undersampling directly: pick too low
+       a sampling rate and the sharp R-wave peak is no longer captured
+       accurately — a measurable symptom of violating the Nyquist
+       criterion.
+4. A real ECG recording (ecg_sample.csv) used to demonstrate sampling,
    digital band-pass filtering and R-peak / heart-rate detection.
-4. A side-by-side comparison of all five heartbeat types against the
-   normal reference range, so you can see how each one deviates from
-   "how a heartbeat should look" — including the flatline case, which
-   deviates from all of them by having no heartbeat at all.
+5. A side-by-side comparison of all five heartbeat types against the
+   normal reference range.
 
 Educational project — NOT intended for medical diagnosis.
 """
@@ -97,6 +110,10 @@ st.markdown(
         70%  {box-shadow: 0 0 0 14px rgba(239,68,68,0);}
         100% {box-shadow: 0 0 0 0 rgba(239,68,68,0);}
     }
+    .ref-box {
+        background: #0b1220; border: 1px solid #1e3a8a; border-radius: 12px;
+        padding: 0.7rem 1rem; font-size: 0.88rem; color: #bfdbfe;
+    }
     section[data-testid="stSidebar"] {border-right: 1px solid rgba(148,163,184,0.2);}
     </style>
     """,
@@ -116,7 +133,8 @@ st.markdown(
             <span class="flow-badge">Digital x[n]</span> →
             <span class="flow-badge">Filtering</span> →
             <span class="flow-badge">R-Peak Detection</span> →
-            <span class="flow-badge">Heart Rate</span>
+            <span class="flow-badge">Heart Rate</span> →
+            <span class="flow-badge">🆚 Reference Compare</span>
         </div>
     </div>
     """,
@@ -215,9 +233,31 @@ HEARTBEAT_TYPES = {
     },
 }
 
+# ---------------------------------------------------------------------
+# NEW: fixed reference rhythm + reference material used everywhere the
+# app compares a "sample" heartbeat against a trusted baseline.
+# ---------------------------------------------------------------------
+REFERENCE_KIND = "Normal Heartbeat"
+REFERENCE_COLOR = "#2563eb"  # a fixed "reference blue", used consistently
+
+# Real, working reference links to genuine (non-synthetic) ECG / heart
+# sound material — used for the "listen to a real recording" and
+# "read more" links throughout the app.
+REFERENCE_LINKS = {
+    "PhysioNet — MIT-BIH Arrhythmia Database": "https://physionet.org/content/mitdb/1.0.0/",
+    "Wikipedia — Electrocardiography": "https://en.wikipedia.org/wiki/Electrocardiography",
+    "Wikipedia — Heart sounds": "https://en.wikipedia.org/wiki/Heart_sounds",
+}
+
 
 def is_flatline(kind: str) -> bool:
     return HEARTBEAT_TYPES[kind]["flatline"]
+
+
+def reference_links_markdown() -> str:
+    """A single, reusable line of real, workable reference links."""
+    parts = [f"[{name}]({url})" for name, url in REFERENCE_LINKS.items()]
+    return "🔗 **Reference links (real recordings & theory):** " + " · ".join(parts)
 
 
 # =====================================================================
@@ -225,7 +265,7 @@ def is_flatline(kind: str) -> bool:
 # =====================================================================
 
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_ecg_csv(path: str = "ecg_sample.csv") -> np.ndarray:
     """Robustly load the single-column ECG recording shipped with the app."""
     df = pd.read_csv(path, on_bad_lines="skip", engine="python")
@@ -340,9 +380,12 @@ def build_flatline_signal(fs: float, duration_s: float = FLATLINE_DURATION_S, se
     return rng.normal(0, 0.0015, n)
 
 
+@st.cache_data(show_spinner=False)
 def build_signal_for_kind(kind: str, fs: float, n_beats: int = 40, seed: int = 7):
     """
-    Unified signal builder used everywhere in the app.
+    Unified signal builder used everywhere in the app. Cached so that
+    switching tabs, dragging sliders, etc. doesn't regenerate the same
+    signal from scratch on every Streamlit rerun.
     Returns (signal, rr_list) where rr_list is None for the flatline type.
     """
     if is_flatline(kind):
@@ -371,6 +414,68 @@ def analyze_kind(kind: str, signal: np.ndarray, fs: float):
     rr, hr, sdnn = heart_rate_metrics(peaks, fs)
     verdict, css_class = verdict_for(hr, sdnn)
     return filtered, peaks, rr, hr, sdnn, verdict, css_class
+
+
+# ---------------------------------------------------------------------
+# NEW: Reference-vs-Sample comparison helpers
+# ---------------------------------------------------------------------
+
+
+@st.cache_data(show_spinner=False)
+def build_continuous_signal(kind: str, fs_continuous: float, n_beats: int = 20, seed: int = 7):
+    """
+    Build a fine-grained version of a heartbeat signal that stands in for
+    the naturally continuous x(t). A digital computer can never store a
+    literal continuum of values, so — exactly like the rest of this app's
+    "Sampling & Filtering" tab does for the real ECG recording — a very
+    fine, high-rate time grid (e.g. 1000 samples/second) is used as a
+    visually and numerically "continuous" approximation of x(t).
+    Returns (t_continuous, x_continuous, rr_list).
+    """
+    signal, rr_list = build_signal_for_kind(kind, fs=fs_continuous, n_beats=n_beats, seed=seed)
+    t = np.arange(len(signal)) / fs_continuous
+    return t, signal, rr_list
+
+
+def sample_from_continuous(t_continuous: np.ndarray, x_continuous: np.ndarray,
+                            fs_continuous: float, fs_target: float):
+    """
+    The actual sampling operation, x[n] = x(nT): pick out every
+    `step`-th point of the fine "continuous" signal, where
+    step = fs_continuous / fs_target. This is the same slicing approach
+    used on the real ECG recording in the 'Sampling & Filtering' tab,
+    applied here to the synthetic reference/sample heartbeats too.
+    """
+    step = max(1, round(fs_continuous / fs_target))
+    return t_continuous[::step], x_continuous[::step]
+
+
+def rhythm_similarity(x_a: np.ndarray, x_b: np.ndarray):
+    """
+    Normalized cross-correlation ("similarity score") between two signals,
+    computed over their shared duration:
+
+        rho = (a . b) / (||a|| * ||b||),   a = x_a - mean(x_a), b = x_b - mean(x_b)
+
+    rho = 1.0  -> the two traces are perfectly alike (same shape & timing)
+    rho = 0.0  -> the two traces are unrelated
+    rho = -1.0 -> the two traces are perfect mirror images of each other
+
+    This is the same kind of similarity/correlation measure used in
+    Signals & Systems to compare two signals, and it is applied here to
+    BOTH the continuous and the discrete versions of a rhythm pair so you
+    can see, numerically, how much (or how little) information sampling
+    preserved.
+    """
+    n = min(len(x_a), len(x_b))
+    if n < 2:
+        return None
+    a = x_a[:n] - np.mean(x_a[:n])
+    b = x_b[:n] - np.mean(x_b[:n])
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0:
+        return None
+    return float(np.dot(a, b) / denom)
 
 
 def render_live_ecg_monitor(kind: str, signal: np.ndarray, columns_per_second: int = 150, height: int = 260):
@@ -501,6 +606,7 @@ def render_live_ecg_monitor(kind: str, signal: np.ndarray, columns_per_second: i
     components_html(html_code, height=height + 60)
 
 
+@st.cache_data(show_spinner=False)
 def synthesize_heartbeat_audio(kind: str, rr_intervals=None, sample_rate: int = AUDIO_FS,
                                 flatline_duration_s: float = FLATLINE_DURATION_S) -> bytes:
     """
@@ -510,14 +616,17 @@ def synthesize_heartbeat_audio(kind: str, rr_intervals=None, sample_rate: int = 
     - Cardiac Arrest (Flatline) -> a single, continuous monitor alarm
       tone (the classic "flatline beep" heard when a patient's heart
       stops), instead of any lub-dub beats.
+    Cached (pure function of its inputs) so re-selecting the same rhythm
+    doesn't resynthesize the audio from scratch every rerun.
     """
     if is_flatline(kind):
         return synthesize_flatline_alarm(flatline_duration_s, sample_rate)
 
+    rr_intervals = tuple(rr_intervals) if rr_intervals is not None else tuple()
     total_duration = float(np.sum(rr_intervals)) + 1.0
     t = np.linspace(0, total_duration, int(sample_rate * total_duration), endpoint=False)
     audio = np.zeros_like(t)
-    starts = np.concatenate(([0.0], np.cumsum(rr_intervals)[:-1]))
+    starts = np.concatenate(([0.0], np.cumsum(rr_intervals)[:-1])) if rr_intervals else np.array([0.0])
 
     for start in starts:
         idx = t >= start
@@ -546,6 +655,7 @@ def synthesize_heartbeat_audio(kind: str, rr_intervals=None, sample_rate: int = 
     return buffer.getvalue()
 
 
+@st.cache_data(show_spinner=False)
 def synthesize_flatline_alarm(duration_s: float = FLATLINE_DURATION_S, sample_rate: int = AUDIO_FS) -> bytes:
     """
     The classic hospital-monitor 'flatline' alarm: a single, sustained,
@@ -719,6 +829,45 @@ at **250–1000 Hz**, comfortably above the heart's ~0.5–40 Hz content.
 """
             )
 
+    st.subheader("🆚 Comparing a Reference Signal to a Sample Signal")
+    st.markdown(
+        """
+A very common task in signal processing — and the core of the new
+**Reference vs. Sample** comparison in the *Choose, Listen & Analyze* tab —
+is deciding **how alike two signals are**. Here, the fixed *Normal Heartbeat*
+rhythm plays the role of a trusted **reference signal**, $x_{ref}(t)$, and
+whichever rhythm you pick plays the role of the **sample (test) signal**,
+$x_{test}(t)$. Both are sampled with the *same* period $T$, so they can be
+compared point-for-point:
+"""
+    )
+    st.latex(r"x_{ref}[n] = x_{ref}(nT) \qquad\qquad x_{test}[n] = x_{test}(nT)")
+    st.markdown(
+        r"""
+To turn "they look similar" into a number, the app computes a
+**normalized cross-correlation similarity score**:
+
+$$\rho = \dfrac{a \cdot b}{\lVert a \rVert \, \lVert b \rVert}, \qquad
+a = x_{ref} - \overline{x_{ref}}, \quad b = x_{test} - \overline{x_{test}}$$
+
+- $\rho = 1$ → the two traces are (almost) identical in shape and timing.
+- $\rho = 0$ → the two traces are unrelated.
+- $\rho = -1$ → the two traces are mirror images of one another.
+
+Two genuinely *different* rhythms (say Normal vs. Tachycardia) will score a
+**low** $\rho$ at almost any sampling rate, simply because their beats fall
+at different instants in time — that is a real difference between the
+signals, not a sampling artifact. What sampling rate *does* affect is
+whether the sharp, ~9 ms-wide R-wave peak gets captured accurately at all:
+the app also reports what fraction of the reference signal's true R-peak
+height survives at your chosen sampling frequency, which shrinks once the
+sampling rate drops too low relative to the R-wave's width — a direct,
+measurable symptom of the **Nyquist criterion** being violated, alongside
+the visual blurring already shown for the real ECG in the "Sampling &
+Filtering" tab.
+"""
+    )
+
     st.subheader("Why digitizing the ECG matters")
     apps = [
         ("🧹 Noise & Artifact Filtering", "Digital filters remove baseline wander, muscle noise, and 50/60 Hz power-line interference."),
@@ -732,6 +881,8 @@ at **250–1000 Hz**, comfortably above the heart's ~0.5–40 Hz content.
     for i, (title, desc) in enumerate(apps):
         with cols[i % 3]:
             st.markdown(f"**{title}**  \n{desc}")
+
+    st.info(reference_links_markdown())
 
 # ---------------------------------------------------------------------
 # TAB 2 — CHOOSE, LISTEN & ANALYZE  (the core requested flow)
@@ -751,6 +902,7 @@ with tab_listen:
     )
     cfg = HEARTBEAT_TYPES[heartbeat_type]
     flat = is_flatline(heartbeat_type)
+    is_reference_itself = heartbeat_type == REFERENCE_KIND
 
     st.markdown(f"### {cfg['icon']} {heartbeat_type}")
     st.write(cfg["description"])
@@ -793,25 +945,80 @@ with tab_listen:
         )
     render_live_ecg_monitor(heartbeat_type, live_signal)
 
-    st.markdown("#### 🔊 Listen to this heartbeat")
+    # ------------------------------------------------------------
+    # NEW: Reference audio + Sample audio, side by side, plus real,
+    # workable reference links.
+    # ------------------------------------------------------------
+    st.markdown("#### 🔊 Listen: Reference vs. Sample")
     if flat:
         st.caption(
-            "This is the continuous **flatline alarm tone** a hospital monitor "
-            "emits the instant it stops detecting a heartbeat — a single, "
-            "unbroken pitch, very different from the rhythmic 'lub-dub' of a "
-            "beating heart."
+            "The **sample** below is the continuous flatline alarm tone a "
+            "hospital monitor emits the instant it stops detecting a "
+            "heartbeat — a single, unbroken pitch, very different from the "
+            "rhythmic 'lub-dub' of the healthy **reference** rhythm next to it."
         )
-    audio_bytes = synthesize_heartbeat_audio(heartbeat_type, rr_list)
-    st.audio(audio_bytes, format="audio/wav")
+    if is_reference_itself:
+        st.caption(
+            "ℹ️ You've selected the reference rhythm itself, so the reference "
+            "and sample clips (and the graphs further below) will match "
+            "closely — a good sanity check that the comparison tools are "
+            "working correctly."
+        )
+
+    sample_audio_bytes = synthesize_heartbeat_audio(heartbeat_type, rr_list)
+    ref_rr_list = rr_sequence(REFERENCE_KIND, n_beats=N_BEATS, seed=SEED)
+    reference_audio_bytes = synthesize_heartbeat_audio(REFERENCE_KIND, ref_rr_list)
+
+    col_ref_audio, col_sample_audio = st.columns(2)
+    with col_ref_audio:
+        st.markdown(f"🔵 **Reference — {REFERENCE_KIND}**")
+        st.caption("Always the same healthy 60–100 BPM baseline, for every rhythm you pick.")
+        st.audio(reference_audio_bytes, format="audio/wav")
+        st.download_button(
+            "⬇️ Download reference audio (.wav)",
+            reference_audio_bytes,
+            file_name="reference_normal_heartbeat.wav",
+            mime="audio/wav",
+            key="dl_ref_audio",
+        )
+    with col_sample_audio:
+        st.markdown(f"{cfg['icon']} **Sample — {heartbeat_type}**")
+        st.caption("The rhythm you chose in Step 1, above.")
+        st.audio(sample_audio_bytes, format="audio/wav")
+        st.download_button(
+            "⬇️ Download sample audio (.wav)",
+            sample_audio_bytes,
+            file_name=f"sample_{heartbeat_type.split()[0].lower()}_heartbeat.wav",
+            mime="audio/wav",
+            key="dl_sample_audio",
+        )
+
+    st.markdown(
+        f"<div class='ref-box'>{reference_links_markdown()} — use these to compare "
+        "these *synthetic* audio/graphs against genuine, human-recorded ECG "
+        "and heart-sound data.</div>",
+        unsafe_allow_html=True,
+    )
 
     st.divider()
     st.markdown(
-        "<span class='step-badge'>3</span>**Analyze this heartbeat**",
+        "<span class='step-badge'>3</span>**Analyze this heartbeat & compare it with the reference**",
         unsafe_allow_html=True,
     )
-    analyze_clicked = st.button("▶ Analyze This Heartbeat", key="analyze_btn")
 
+    if "analyzed_kind" not in st.session_state:
+        st.session_state.analyzed_kind = None
+
+    analyze_clicked = st.button("▶ Analyze This Heartbeat", key="analyze_btn")
     if analyze_clicked:
+        st.session_state.analyzed_kind = heartbeat_type
+
+    # Using session_state (instead of just `if analyze_clicked:`) means the
+    # analysis + comparison stays on screen while you move the sliders
+    # below, instead of vanishing on the very next Streamlit rerun.
+    show_analysis = st.session_state.analyzed_kind == heartbeat_type
+
+    if show_analysis:
         fs_analysis = 500  # fine internal rate for accurate filtering/detection
         train, rr_list_analysis = build_signal_for_kind(
             heartbeat_type, fs=fs_analysis, n_beats=N_BEATS, seed=SEED
@@ -858,12 +1065,143 @@ with tab_listen:
         ax_a.grid(alpha=0.3)
         st.pyplot(fig_a, use_container_width=True)
         plt.close(fig_a)
+
+        # ------------------------------------------------------------
+        # NEW: Reference vs. Sample — continuous & discrete comparison
+        # ------------------------------------------------------------
+        st.divider()
+        st.markdown("#### 🆚 Reference vs. Sample — Continuous & Discrete Signal Comparison")
+        st.caption(
+            "The fixed Normal-heartbeat **reference** (🔵 blue, always the same) is "
+            "plotted against the **sample** you chose (its own color), both as a "
+            "near-continuous trace x(t) and as discrete samples x[n] = x(nT) — so "
+            "you can see exactly what changes between the two rhythms, and exactly "
+            "what sampling keeps or loses for each of them."
+        )
+
+        cmp_col1, cmp_col2 = st.columns(2)
+        with cmp_col1:
+            fs_compare_disc = st.slider(
+                "Sampling frequency for the discrete comparison (Hz)",
+                min_value=20, max_value=500, value=150, step=10, key="cmp_fs_slider",
+                help="Try lowering this well below ~40 Hz to see the R-peak amplitude-retention metric below drop off.",
+            )
+        with cmp_col2:
+            compare_seconds = st.slider(
+                "Seconds of signal to display", min_value=2, max_value=15, value=6,
+                step=1, key="cmp_secs_slider",
+            )
+
+        FS_COMPARE_CONTINUOUS = 1000.0  # fine grid standing in for x(t)
+        t_ref_c, x_ref_c, _ = build_continuous_signal(REFERENCE_KIND, FS_COMPARE_CONTINUOUS, n_beats=N_BEATS, seed=SEED)
+        t_sam_c, x_sam_c, _ = build_continuous_signal(heartbeat_type, FS_COMPARE_CONTINUOUS, n_beats=N_BEATS, seed=SEED)
+
+        t_ref_d, x_ref_d = sample_from_continuous(t_ref_c, x_ref_c, FS_COMPARE_CONTINUOUS, fs_compare_disc)
+        t_sam_d, x_sam_d = sample_from_continuous(t_sam_c, x_sam_c, FS_COMPARE_CONTINUOUS, fs_compare_disc)
+
+        # ① Continuous signal comparison
+        fig_cc, ax_cc = plt.subplots(figsize=(11, 3))
+        ax_cc.plot(t_ref_c, x_ref_c, color=REFERENCE_COLOR, linewidth=1.4,
+                   label=f"Reference (continuous) — {REFERENCE_KIND}")
+        ax_cc.plot(t_sam_c, x_sam_c, color=cfg["color"], linewidth=1.1, alpha=0.9,
+                   label=f"Sample (continuous) — {heartbeat_type}")
+        ax_cc.set_xlim(0, compare_seconds)
+        ax_cc.set_xlabel("Time (s)")
+        ax_cc.set_ylabel("Amplitude")
+        ax_cc.set_title("① Continuous signal comparison — x(t)")
+        ax_cc.legend(loc="upper right", fontsize=8)
+        ax_cc.grid(alpha=0.3)
+        st.pyplot(fig_cc, use_container_width=True)
+        plt.close(fig_cc)
+
+        # ② Discrete signal comparison
+        fig_dd, ax_dd = plt.subplots(figsize=(11, 3))
+        ax_dd.plot(t_ref_d, x_ref_d, color=REFERENCE_COLOR, marker="o", markersize=4,
+                   linestyle=":", linewidth=0.9, label=f"Reference (discrete) — {REFERENCE_KIND}")
+        ax_dd.plot(t_sam_d, x_sam_d, color=cfg["color"], marker="^", markersize=4,
+                   linestyle=":", linewidth=0.9, label=f"Sample (discrete) — {heartbeat_type}")
+        ax_dd.set_xlim(0, compare_seconds)
+        ax_dd.set_xlabel("Time (s)")
+        ax_dd.set_ylabel("Amplitude")
+        ax_dd.set_title(f"② Discrete signal comparison — x[n] = x(nT), fs = {fs_compare_disc:.0f} Hz")
+        ax_dd.legend(loc="upper right", fontsize=8)
+        ax_dd.grid(alpha=0.3)
+        st.pyplot(fig_dd, use_container_width=True)
+        plt.close(fig_dd)
+
+        # ③ Combined dashboard — continuous (top) + discrete (bottom)
+        fig_comb, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
+        ax_top.plot(t_ref_c, x_ref_c, color=REFERENCE_COLOR, linewidth=1.4, label="Reference (continuous)")
+        ax_top.plot(t_sam_c, x_sam_c, color=cfg["color"], linewidth=1.1, alpha=0.9, label="Sample (continuous)")
+        ax_top.set_title("③ Combined view — continuous (top) & discrete (bottom)")
+        ax_top.set_ylabel("Amplitude")
+        ax_top.legend(loc="upper right", fontsize=8)
+        ax_top.grid(alpha=0.3)
+
+        ax_bot.plot(t_ref_d, x_ref_d, color=REFERENCE_COLOR, marker="o", markersize=4,
+                    linestyle=":", linewidth=0.9, label="Reference (discrete)")
+        ax_bot.plot(t_sam_d, x_sam_d, color=cfg["color"], marker="^", markersize=4,
+                    linestyle=":", linewidth=0.9, label="Sample (discrete)")
+        ax_bot.set_xlim(0, compare_seconds)
+        ax_bot.set_xlabel("Time (s)")
+        ax_bot.set_ylabel("Amplitude")
+        ax_bot.legend(loc="upper right", fontsize=8)
+        ax_bot.grid(alpha=0.3)
+        fig_comb.tight_layout()
+        st.pyplot(fig_comb, use_container_width=True)
+        plt.close(fig_comb)
+
+        # Similarity metrics — a normalized cross-correlation "closeness score"
+        sim_cont = rhythm_similarity(x_ref_c, x_sam_c)
+        sim_disc = rhythm_similarity(x_ref_d, x_sam_d)
+        ref_peak_ratio = (
+            np.max(np.abs(x_ref_d)) / np.max(np.abs(x_ref_c)) if np.max(np.abs(x_ref_c)) > 0 else None
+        )
+        mcol1, mcol2, mcol3 = st.columns(3)
+        mcol1.metric("Continuous similarity ρ  (x(t) vs x(t))",
+                     f"{sim_cont:.3f}" if sim_cont is not None else "—")
+        mcol2.metric(f"Discrete similarity ρ @ {fs_compare_disc:.0f} Hz  (x[n] vs x[n])",
+                     f"{sim_disc:.3f}" if sim_disc is not None else "—")
+        mcol3.metric("Reference R-peak amplitude retained",
+                     f"{ref_peak_ratio*100:.1f}%" if ref_peak_ratio is not None else "—")
+
+        if sim_cont is not None and sim_disc is not None:
+            st.caption(
+                f"**Reading ρ:** 1.0 = identical shape & timing, 0 = unrelated, "
+                f"-1.0 = mirror images. Two genuinely *different* rhythms (e.g. "
+                f"Normal vs. Tachycardia) will show a **low** ρ at almost any "
+                f"sampling rate simply because their beats fall at different "
+                f"instants — that's a real difference in the signals, not a "
+                f"sampling artifact. Because x[n] is literally a subset of the "
+                f"points in x(t), ρ for the continuous and discrete versions "
+                f"normally stay close to each other."
+            )
+        if ref_peak_ratio is not None:
+            st.caption(
+                f"**The number that *does* expose undersampling** is the third "
+                f"metric above: the R-wave is only ~9 ms wide, so at a low "
+                f"sampling frequency the sampler can easily land *around* the "
+                f"peak instead of *on* it, under-reporting its true height "
+                f"(here, only {ref_peak_ratio*100:.1f}% of the true peak was "
+                f"captured at {fs_compare_disc:.0f} Hz). Try dragging the slider "
+                f"down toward 15–25 Hz and watch this percentage become "
+                f"noticeably less reliable — the same undersampling risk the "
+                f"'Sampling & Filtering' tab demonstrates visually on the real "
+                f"ECG recording, and the reason clinical ECGs are sampled at "
+                f"250–1000 Hz rather than a few tens of Hz."
+            )
+
+        st.markdown(reference_links_markdown())
     else:
-        st.info("Press **Analyze This Heartbeat** to run sampling → filtering → R-peak detection → heart rate on this rhythm.")
+        st.info(
+            "Press **▶ Analyze This Heartbeat** to run sampling → filtering → "
+            "R-peak detection → heart rate on this rhythm, and to compare its "
+            "continuous & discrete signals against the Normal-heartbeat reference."
+        )
 
     st.divider()
     st.markdown(
-        "<span class='step-badge'>4</span>**Compare with the other rhythms** — "
+        "<span class='step-badge'>4</span>**Compare with all rhythms** — "
         "head over to the **⚖️ Compare All 5 Types** tab to see this rhythm "
         "measured side-by-side against the other four, including the flatline case.",
         unsafe_allow_html=True,
@@ -938,6 +1276,8 @@ with tab_sampling:
 
     st.session_state["_filtered_real"] = filtered_real
 
+    st.caption(reference_links_markdown())
+
 # ---------------------------------------------------------------------
 # TAB 4 — R-PEAK DETECTION & HEART RATE (real recording)
 # ---------------------------------------------------------------------
@@ -977,6 +1317,7 @@ with tab_rpeak:
 
     st.divider()
     st.caption("Educational project — not intended for medical diagnosis.")
+    st.caption(reference_links_markdown())
 
 # ---------------------------------------------------------------------
 # TAB 5 — COMPARE ALL 5 HEARTBEAT TYPES
@@ -1059,6 +1400,28 @@ with tab_compare:
         "makes it 'irregular' — and the flatline case sits at exactly 0 BPM "
         "with no RR variability to measure at all, because there are no beats."
     )
+
+    st.caption(reference_links_markdown())
+
+st.divider()
+st.subheader("📚 References & Further Reading")
+st.markdown(
+    """
+- **PhysioNet — MIT-BIH Arrhythmia Database.** Real, clinically-recorded ECG
+  signals used worldwide to validate arrhythmia-detection algorithms —
+  a genuine counterpart to this app's synthetic heartbeat examples.
+  <https://physionet.org/content/mitdb/1.0.0/>
+- **Wikipedia — Electrocardiography.** Background on how and why ECGs are
+  recorded, and how the P-Q-R-S-T waveform arises.
+  <https://en.wikipedia.org/wiki/Electrocardiography>
+- **Wikipedia — Heart sounds.** Theory of the S1 ("lub") / S2 ("dub") heart
+  sounds this app's synthetic audio is modeled on, with links to real
+  auscultation recordings. <https://en.wikipedia.org/wiki/Heart_sounds>
+- Goldberger, A. L. et al. (2000). *PhysioBank, PhysioToolkit, and
+  PhysioNet: Components of a New Research Resource for Complex Physiologic
+  Signals.* **Circulation**, 101(23), e215–e220.
+"""
+)
 
 st.divider()
 st.caption(
