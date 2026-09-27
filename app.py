@@ -25,7 +25,7 @@ Educational project — NOT intended for medical diagnosis.
 """
 
 import io
-import time
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,6 +33,7 @@ import pandas as pd
 import streamlit as st
 from scipy.io.wavfile import write as write_wav
 from scipy.signal import butter, filtfilt, find_peaks
+from streamlit.components.v1 import html as components_html
 
 # =====================================================================
 # PAGE CONFIG + STYLE
@@ -271,6 +272,122 @@ def build_ecg_train(rr_intervals: list, fs: float) -> np.ndarray:
     return np.concatenate([synth_beat(rr, fs) for rr in rr_intervals])
 
 
+def render_live_ecg_monitor(kind: str, rr_list: list, columns_per_second: int = 150, height: int = 260):
+    """
+    Render a genuinely MOVING, continuously-sweeping ECG monitor — like a
+    real bedside cardiac monitor — using an HTML5 <canvas> animated with
+    requestAnimationFrame (runs entirely in the browser, so it never
+    freezes or "finishes" the way a Python-side loop does).
+
+    The trace is drawn as a moving pen: new samples are written just ahead
+    of a small blank gap, and once the sweep reaches the right edge it
+    wraps back to the left and starts overwriting the old trace — exactly
+    like a real ECG / vitals monitor.
+    """
+    cfg = HEARTBEAT_TYPES[kind]
+
+    # Build the waveform at a sample rate that matches the animation speed
+    # (1 real second of playback == 1 second of signal), so faster rhythms
+    # (tachycardia) visibly sweep by quicker than slower ones (bradycardia).
+    stream = build_ecg_train(rr_list, columns_per_second)
+    amp = np.max(np.abs(stream)) or 1.0
+    normalized = (stream / amp).tolist()
+    data_json = json.dumps(normalized)
+
+    canvas_id = f"ecgCanvas_{abs(hash(kind)) % 100000}"
+
+    template = """
+    <div style="background:#020617;border-radius:14px;padding:10px 14px;
+                border:1px solid #1f2937;">
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  margin-bottom:6px;">
+        <span style="color:#9ca3af;font:600 12px sans-serif;letter-spacing:.6px;">
+          &#128137; LIVE ECG MONITOR
+        </span>
+        <span style="color:__COLOR__;font:700 13px sans-serif;">__LABEL__</span>
+      </div>
+      <canvas id="__CANVAS_ID__" width="900" height="__CANVAS_H__"
+              style="width:100%;display:block;border-radius:8px;background:#000;">
+      </canvas>
+    </div>
+    <script>
+    (function () {
+        const data = __DATA__;
+        const color = "__COLOR__";
+        const canvas = document.getElementById("__CANVAS_ID__");
+        const ctx = canvas.getContext("2d");
+        const W = canvas.width, H = canvas.height;
+        const screen = new Array(W).fill(null);
+        const pxPerSecond = __PXPS__;   // columns advanced per real second
+        const gapAhead = 14;            // blank "pen tip" gap ahead of the trace
+
+        let n = 0;            // total columns written so far
+        let pointer = 0;       // fractional accumulator
+        let lastTime = null;
+
+        function drawGrid() {
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(0, 0, W, H);
+            ctx.strokeStyle = "rgba(31,58,42,0.9)";
+            ctx.lineWidth = 1;
+            for (let x = 0; x < W; x += 20) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+            }
+            for (let y = 0; y < H; y += 20) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+            }
+        }
+
+        function step(ts) {
+            if (lastTime === null) lastTime = ts;
+            const dt = (ts - lastTime) / 1000;
+            lastTime = ts;
+
+            pointer += pxPerSecond * dt;
+
+            while (pointer >= 1) {
+                pointer -= 1;
+                const dataIdx = n % data.length;
+                const col = n % W;
+                screen[col] = data[dataIdx];
+                for (let g = 1; g <= gapAhead; g++) {
+                    screen[(col + g) % W] = null;
+                }
+                n++;
+            }
+
+            drawGrid();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            let started = false;
+            for (let x = 0; x < W; x++) {
+                const v = screen[x];
+                if (v === null || v === undefined) { started = false; continue; }
+                const y = H / 2 - v * (H * 0.42);
+                if (!started) { ctx.moveTo(x, y); started = true; }
+                else { ctx.lineTo(x, y); }
+            }
+            ctx.stroke();
+
+            requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    })();
+    </script>
+    """
+
+    html_code = (
+        template.replace("__DATA__", data_json)
+        .replace("__PXPS__", str(columns_per_second))
+        .replace("__COLOR__", cfg["color"])
+        .replace("__LABEL__", kind.upper())
+        .replace("__CANVAS_ID__", canvas_id)
+        .replace("__CANVAS_H__", str(height))
+    )
+    components_html(html_code, height=height + 60)
+
+
 def synthesize_heartbeat_audio(rr_intervals: list, sample_rate: int = AUDIO_FS):
     """Turn a list of RR intervals into an audible 'lub-dub' heartbeat sound."""
     total_duration = float(np.sum(rr_intervals)) + 1.0
@@ -476,60 +593,64 @@ with tab_listen:
     st.subheader(f"{cfg['icon']} {heartbeat_type}")
     st.write(cfg["description"])
 
-    rr_list = rr_sequence(heartbeat_type)
-    fs_synth = 500  # smooth internal rate for the synthetic waveform
-    train = build_ecg_train(rr_list, fs_synth)
-    train_t = np.arange(len(train)) / fs_synth
+    # One fixed rhythm (ground truth) per type — reused for the live
+    # monitor, the audio, and the analysis, so everything you see, hear
+    # and measure is the exact same heartbeat.
+    N_BEATS = 40
+    SEED = 7
+    rr_list = rr_sequence(heartbeat_type, n_beats=N_BEATS, seed=SEED)
     true_hr = 60.0 / np.mean(rr_list)
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Ground-truth Heart Rate", f"{true_hr:.0f} BPM")
-    col2.metric("Number of beats generated", f"{len(rr_list)}")
+    col2.metric("Beats generated", f"{len(rr_list)}")
     col3.metric("Avg. RR interval", f"{np.mean(rr_list):.2f} s")
 
-    st.markdown("#### 🔊 Listen to this heartbeat")
+    st.markdown("#### 📟 Live ECG Monitor")
+    st.caption(
+        "Continuously sweeps like a real bedside monitor — the pen writes "
+        "new beats and wraps around, overwriting the old trace, forever."
+    )
+    render_live_ecg_monitor(heartbeat_type, rr_list)
+
+    st.markdown("#### 🔊 Step 1 — Listen to this heartbeat")
     audio_bytes = synthesize_heartbeat_audio(rr_list)
     st.audio(audio_bytes, format="audio/wav")
 
-    st.markdown("#### 📟 Live ECG Monitor (moving trace)")
-    run_live = st.button("▶ Start Live Monitor", key="live_btn")
+    st.markdown("#### 🔬 Step 2 — Analyze this heartbeat")
+    analyze_clicked = st.button("▶ Analyze This Heartbeat", key="analyze_btn")
 
-    live_placeholder = st.empty()
-    static_placeholder = st.empty()
+    if analyze_clicked:
+        fs_analysis = 500  # fine internal rate for accurate filtering/detection
+        train = build_ecg_train(rr_list, fs_analysis)
+        train_t = np.arange(len(train)) / fs_analysis
 
-    if run_live:
-        window_seconds = 3.0
-        window_size = max(10, int(window_seconds * fs_synth))
-        step = max(1, fs_synth // 25)  # ~25 fps
-        n_total = len(train)
+        filtered = bandpass_filter(train, fs_analysis)
+        peaks = detect_r_peaks(filtered, fs_analysis, mode="synth")
+        rr, hr, sdnn = heart_rate_metrics(peaks, fs_analysis)
+        verdict, css_class = verdict_for(hr, sdnn)
 
-        for i in range(window_size, n_total, step):
-            lo = max(0, i - window_size)
-            seg_t = train_t[lo:i]
-            seg_y = train[lo:i]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Detected R-peaks", f"{len(peaks)}")
+        m2.metric("Detected Heart Rate", f"{hr:.1f} BPM" if hr else "—")
+        m3.metric("Avg. RR interval", f"{np.mean(rr):.3f} s" if rr is not None else "—")
+        m4.metric("RR variability (SDNN)", f"{sdnn:.1f} ms" if sdnn else "—")
 
-            fig_live, ax_live = plt.subplots(figsize=(11, 3))
-            fig_live.patch.set_facecolor("#020617")
-            ax_live.set_facecolor("#020617")
-            ax_live.plot(seg_t, seg_y, color="#39ff88", linewidth=2)
-            ax_live.set_xlim(seg_t[0] if len(seg_t) else 0, seg_t[-1] if len(seg_t) else 1)
-            ax_live.set_ylim(-1.0, 1.6)
-            ax_live.axis("off")
-            live_placeholder.pyplot(fig_live, use_container_width=True)
-            plt.close(fig_live)
-            time.sleep(0.025)
+        st.markdown(f"**Interpretation:** <span class='{css_class}'>{verdict}</span>", unsafe_allow_html=True)
 
-        st.success("Live sweep complete — press the button again to replay.")
-
-    # Always show the full static waveform underneath, for reference / reports
-    fig_full, ax_full = plt.subplots(figsize=(11, 3))
-    ax_full.plot(train_t, train, color=cfg["color"], linewidth=1.4)
-    ax_full.set_xlabel("Time (s)")
-    ax_full.set_ylabel("Amplitude (mV)")
-    ax_full.set_title(f"Full waveform — {heartbeat_type}")
-    ax_full.grid(alpha=0.3)
-    static_placeholder.pyplot(fig_full, use_container_width=True)
-    plt.close(fig_full)
+        fig_a, ax_a = plt.subplots(figsize=(11, 3.2))
+        ax_a.plot(train_t, filtered, color=cfg["color"], linewidth=1.3, label="Filtered ECG")
+        ax_a.scatter(train_t[peaks], filtered[peaks], color="black", s=30, zorder=3, label="R Peaks")
+        ax_a.set_xlim(0, min(10, train_t[-1]))
+        ax_a.set_xlabel("Time (s)")
+        ax_a.set_ylabel("Amplitude")
+        ax_a.set_title(f"Analysis — {heartbeat_type} (first 10 s shown)")
+        ax_a.legend()
+        ax_a.grid(alpha=0.3)
+        st.pyplot(fig_a, use_container_width=True)
+        plt.close(fig_a)
+    else:
+        st.info("Press **Analyze This Heartbeat** to run sampling → filtering → R-peak detection → heart rate on this rhythm.")
 
 # ---------------------------------------------------------------------
 # TAB 3 — SAMPLING & FILTERING (real recording)
